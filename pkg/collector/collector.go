@@ -21,10 +21,11 @@ import (
 
 // Collector exposes functions to scrape web pages and write results to a writer.
 type Collector struct {
-	conf  *config.Config
-	colly *colly.Collector
-	au    aurora.Aurora
-	w     io.Writer
+	conf   *config.Config
+	colly  *colly.Collector
+	client http.Client
+	au     aurora.Aurora
+	w      io.Writer
 }
 
 // NewCollector returns an initialized Collector.
@@ -34,6 +35,16 @@ func NewCollector(config *config.Config, au aurora.Aurora, w io.Writer, url stri
 		colly.MaxDepth(config.Depth),
 		colly.UserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.108 Safari/537.36"),
 	)
+
+	// skip tls verification
+	tranport := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	c.WithTransport(tranport)
+	client := http.Client{
+		Transport: tranport,
+	}
+
 	// set custom headers if specified
 	if config.Cookie != "" {
 		c.OnRequest(func(r *colly.Request) {
@@ -47,10 +58,11 @@ func NewCollector(config *config.Config, au aurora.Aurora, w io.Writer, url stri
 		})
 	}
 	return &Collector{
-		conf:  config,
-		colly: c,
-		au:    au,
-		w:     w,
+		conf:   config,
+		colly:  c,
+		client: client,
+		au:     au,
+		w:      w,
 	}
 }
 
@@ -287,7 +299,7 @@ func (c *Collector) parseRobots(url string, reqsMade *syncList) {
 	var robotsurls []string
 	robotsURL := url + "/robots.txt"
 
-	resp, err := http.Get(robotsURL)
+	resp, err := c.client.Get(robotsURL)
 	if err != nil || resp.StatusCode != 200 {
 		return
 	}
@@ -321,29 +333,34 @@ func (c *Collector) parseRobots(url string, reqsMade *syncList) {
 var linkFinderRegex = regexp.MustCompile(`(?:"|')(((?:[a-zA-Z]{1,10}://|//)[^"'/]{1,}\.[a-zA-Z]{2,}[^"']{0,})|((?:/|\.\./|\./)[^"'><,;| *()(%%$^/\\\[\]][^"'><,;|()]{1,})|([a-zA-Z0-9_\-/]{1,}/[a-zA-Z0-9_\-/]{1,}\.(?:[a-zA-Z]{1,4}|action)(?:[\?|/][^"|']{0,}|))|([a-zA-Z0-9_\-]{1,}\.(?:php|asp|aspx|jsp|json|action|html|js|txt|xml)(?:\?[^"|']{0,}|)))(?:"|')`)
 
 func (c *Collector) linkfinder(jsfile string, tag aurora.Value, plain bool) {
-	// skip tls verification
-	client := http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
-	resp, err := client.Get(jsfile)
+	resp, err := c.client.Get(jsfile)
 	if err != nil || resp.StatusCode != 200 {
 		return
 	}
+	defer resp.Body.Close()
 
 	// if the js file exists
 	res, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return
 	}
-	resp.Body.Close()
+
 	found := linkFinderRegex.FindAllString(string(res), -1)
 	for _, link := range found {
-		c.colorPrint(tag, link + " from " + jsfile, plain)
+		c.colorPrint(tag, link+" from "+jsfile, plain)
 	}
-
 }
 
 func (c *Collector) parseSitemap(url string, reqsMade *syncList) {
 	sitemapURL := url + "/sitemap.xml"
-	sitemap.ParseFromSite(sitemapURL, func(e sitemap.Entry) error {
+
+	resp, err := c.client.Get(sitemapURL)
+	if err != nil || resp.StatusCode != 200 {
+		return
+	}
+	defer resp.Body.Close()
+
+	sitemap.Parse(resp.Body, func(e sitemap.Entry) error {
 		if c.conf.IncludeSitemap || c.conf.IncludeAll {
 			_ = c.recordIfInScope(c.au.BrightBlue("[sitemap]"), url, e.GetLocation(), reqsMade)
 		}
