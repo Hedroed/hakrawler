@@ -126,6 +126,13 @@ func (c *Collector) Crawl(url string) ([]*http.Request, error) {
 		c.parseSitemap(url, reqsMade)
 	}()
 
+	// certificates
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		c.parseCertificate(url, &subdomains, url, reqsMade)
+	}()
+
 	// waybackurls
 	if c.conf.Wayback {
 		wg.Add(1)
@@ -327,6 +334,51 @@ func (c *Collector) parseRobots(url string, reqsMade *syncList) {
 		for _, robotsurl := range robotsurls {
 			c.colly.Visit(robotsurl)
 		}
+	}
+}
+
+var validDomainRegex = regexp.MustCompile("(?:[a-zA-Z](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]")
+
+func (c *Collector) processCertDomain(domain string, subdomains *sync.Map, u string, reqsMade *syncList) {
+	if !c.conf.IncludeCertificates && !c.conf.IncludeAll {
+		return
+	}
+	if _, exists := subdomains.Load(domain); exists {
+		return
+	}
+	if domain != "" && validDomainRegex.MatchString(domain) {
+		c.recordIfInScope(c.au.BrightGreen("[certificate]"), u, domain, reqsMade)
+		subdomains.Store(domain, struct{}{})
+	}
+}
+
+func (c *Collector) parseCertificate(url string, subdomains *sync.Map, u string, reqsMade *syncList) {
+	resp, err := c.client.Get(url)
+	if err != nil || resp.StatusCode != 200 {
+		fmt.Println(err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.TLS == nil {
+		return
+	}
+
+	certs := resp.TLS.PeerCertificates
+
+	for _, cert := range certs {
+		subjectDomain := cert.Subject.CommonName
+		c.processCertDomain(subjectDomain, subdomains, u, reqsMade)
+
+		issuerDomain := cert.Issuer.CommonName
+		c.processCertDomain(issuerDomain, subdomains, u, reqsMade)
+
+		domains := cert.DNSNames
+
+		for _, domain := range domains {
+			c.processCertDomain(domain, subdomains, u, reqsMade)
+		}
+
 	}
 }
 

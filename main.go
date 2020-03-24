@@ -50,6 +50,7 @@ func main() {
 	flag.BoolVar(&conf.IncludeURLs, "urls", false, "Include URLs in output")
 	flag.BoolVar(&conf.IncludeForms, "forms", false, "Include form actions in output")
 	flag.BoolVar(&conf.IncludeRobots, "robots", false, "Include robots.txt entries in output")
+	flag.BoolVar(&conf.IncludeCertificates, "certificates", false, "Include certificates domains in output")
 	flag.BoolVar(&conf.IncludeSitemap, "sitemap", false, "Include sitemap.xml entries in output")
 	flag.BoolVar(&conf.IncludeWayback, "wayback", false, "Include wayback machine entries in output")
 	flag.BoolVar(&conf.IncludeAll, "all", true, "Include everything in output - this is the default, so this option is superfluous")
@@ -62,7 +63,7 @@ func main() {
 	}
 
 	// set up the bools
-	if conf.IncludeJS || conf.IncludeSubs || conf.IncludeURLs || conf.IncludeForms || conf.IncludeRobots || conf.IncludeSitemap {
+	if conf.IncludeJS || conf.IncludeSubs || conf.IncludeURLs || conf.IncludeForms || conf.IncludeRobots || conf.IncludeCertificates || conf.IncludeSitemap {
 		conf.IncludeAll = false
 	}
 
@@ -74,7 +75,6 @@ func main() {
 	}
 
 	stdout := bufio.NewWriter(os.Stdout)
-
 
 	// c := collector.NewCollector(&conf, au, stdout)
 

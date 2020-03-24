@@ -13,22 +13,23 @@ type Config struct {
 	Plain         bool
 	Runlinkfinder bool
 	// output flags
-	DisplayVersion bool
-	IncludeJS      bool
-	IncludeSubs    bool
-	IncludeURLs    bool
-	IncludeForms   bool
-	IncludeRobots  bool
-	IncludeSitemap bool
-	IncludeWayback bool
-	IncludeAll     bool
+	DisplayVersion      bool
+	IncludeJS           bool
+	IncludeSubs         bool
+	IncludeURLs         bool
+	IncludeForms        bool
+	IncludeRobots       bool
+	IncludeCertificates bool
+	IncludeSitemap      bool
+	IncludeWayback      bool
+	IncludeAll          bool
 }
 
 // NewConfig returns a Config with default values.
 func NewConfig() Config {
 	var conf Config
 	// default values
-	conf.Version = "beta9" 
+	conf.Version = "beta9"
 	conf.DisplayVersion = false
 	conf.Url = ""
 	conf.Depth = 1
@@ -45,6 +46,7 @@ func NewConfig() Config {
 	conf.IncludeURLs = false
 	conf.IncludeForms = false
 	conf.IncludeRobots = false
+	conf.IncludeCertificates = false
 	conf.IncludeSitemap = false
 	conf.IncludeWayback = false
 	conf.IncludeAll = true
