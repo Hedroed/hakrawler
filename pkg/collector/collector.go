@@ -281,7 +281,7 @@ func (c *Collector) visitWaybackURLs(u string, subdomains *sync.Map, reqsMade *s
 	}
 }
 
-var re = regexp.MustCompile(".*llow: ")
+var robotsEntryRegex = regexp.MustCompile(".*llow: ")
 
 func (c *Collector) parseRobots(url string, reqsMade *syncList) {
 	var robotsurls []string
@@ -300,8 +300,8 @@ func (c *Collector) parseRobots(url string, reqsMade *syncList) {
 	lines := strings.Split(string(body), "\n")
 
 	for _, line := range lines {
-		if re.MatchString(line) {
-			urlstring := re.ReplaceAllString(line, "")
+		if robotsEntryRegex.MatchString(line) {
+			urlstring := robotsEntryRegex.ReplaceAllString(line, "")
 			if c.conf.IncludeRobots || c.conf.IncludeAll {
 				_ = c.recordIfInScope(c.au.BrightMagenta("[robots]"), url, url+urlstring, reqsMade)
 			}
