@@ -130,7 +130,7 @@ func (c *Collector) Crawl(url string) ([]*http.Request, error) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		c.parseCertificate(url, &subdomains, url, reqsMade)
+		c.parseCertificate(url, &subdomains, reqsMade)
 	}()
 
 	// waybackurls
@@ -352,7 +352,7 @@ func (c *Collector) processCertDomain(domain string, subdomains *sync.Map, u str
 	}
 }
 
-func (c *Collector) parseCertificate(url string, subdomains *sync.Map, u string, reqsMade *syncList) {
+func (c *Collector) parseCertificate(url string, subdomains *sync.Map, reqsMade *syncList) {
 	resp, err := c.client.Get(url)
 	if err != nil || resp.StatusCode != 200 {
 		fmt.Println(err)
@@ -368,15 +368,15 @@ func (c *Collector) parseCertificate(url string, subdomains *sync.Map, u string,
 
 	for _, cert := range certs {
 		subjectDomain := cert.Subject.CommonName
-		c.processCertDomain(subjectDomain, subdomains, u, reqsMade)
+		c.processCertDomain(subjectDomain, subdomains, url, reqsMade)
 
 		issuerDomain := cert.Issuer.CommonName
-		c.processCertDomain(issuerDomain, subdomains, u, reqsMade)
+		c.processCertDomain(issuerDomain, subdomains, url, reqsMade)
 
 		domains := cert.DNSNames
 
 		for _, domain := range domains {
-			c.processCertDomain(domain, subdomains, u, reqsMade)
+			c.processCertDomain(domain, subdomains, url, reqsMade)
 		}
 
 	}
