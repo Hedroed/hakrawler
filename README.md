@@ -30,6 +30,7 @@ assetfinder target.com | hakrawler | some-xss-scanner
 - Accept domains from stdin for easier tool chaining
 - SQLMap-friendly output format
 - Link gathering from JavaScript files
+- TLS Certificates parsing
 
 ## Upcoming features
 
