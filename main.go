@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -75,8 +76,7 @@ func main() {
 	}
 
 	stdout := bufio.NewWriter(os.Stdout)
-
-	// c := collector.NewCollector(&conf, au, stdout)
+	c := collector.NewCollector(&conf, au, stdout)
 
 	urls := make(chan string, 1)
 	var reqsMade []*http.Request
@@ -111,14 +111,19 @@ func main() {
 
 	for u := range urls {
 		wg.Add(1)
-		go func(url string) {
+		go func(urlstring string) {
 			defer wg.Done()
-			c := collector.NewCollector(&conf, au, stdout, url)
 			// url set but does not include schema
-			if !strings.Contains(url, "://") && url != "" {
-				url = "http://" + url
+			if !strings.Contains(urlstring, "://") && urlstring != "" {
+				urlstring = "http://" + urlstring
 			}
-			reqsMade, crawlErr = c.Crawl(url)
+
+			u, err := url.Parse(urlstring)
+			if err != nil {
+				panic(err)
+			}
+
+			reqsMade, crawlErr = c.Crawl(u)
 
 			// Report errors and flush requests to files as we go
 			if crawlErr != nil {

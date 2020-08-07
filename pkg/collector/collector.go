@@ -2,7 +2,6 @@ package collector
 
 import (
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -29,9 +28,8 @@ type Collector struct {
 }
 
 // NewCollector returns an initialized Collector.
-func NewCollector(config *config.Config, au aurora.Aurora, w io.Writer, url string) *Collector {
+func NewCollector(config *config.Config, au aurora.Aurora, w io.Writer) *Collector {
 	c := colly.NewCollector(
-		colly.AllowedDomains(url),
 		colly.MaxDepth(config.Depth),
 		colly.UserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.108 Safari/537.36"),
 		colly.IgnoreRobotsTxt(),
@@ -79,11 +77,7 @@ func (s *syncList) AddReq(r *http.Request) {
 }
 
 // Crawl crawls a domain for urls, subdomains, jsfiles, and forms, printing output as it goes. Returns a list of http requests made
-func (c *Collector) Crawl(url string) ([]*http.Request, error) {
-	// make sure the url has been set
-	if url == "" {
-		return []*http.Request{}, errors.New("url was empty")
-	}
+func (c *Collector) Crawl(u *url.URL) ([]*http.Request, error) {
 
 	// these will store the discovered assets to avoid duplicates
 	var urls sync.Map
@@ -98,16 +92,16 @@ func (c *Collector) Crawl(url string) ([]*http.Request, error) {
 	reqsMade := &syncList{}
 
 	// find and visit the links
-	c.colly.OnHTML("a[href]", c.visitHTMLFunc(&urls, &subdomains, url, reqsMade))
+	c.colly.OnHTML("a[href]", c.visitHTMLFunc(&urls, &subdomains, u, reqsMade))
 
 	if c.conf.IncludeJS || c.conf.IncludeAll {
 		// find and print all the JavaScript files
-		c.colly.OnHTML("script[src]", c.findJSFunc(&jsfiles, url, reqsMade))
+		c.colly.OnHTML("script[src]", c.findJSFunc(&jsfiles, u, reqsMade))
 	}
 
 	if c.conf.IncludeForms || c.conf.IncludeAll {
 		// find and print all the form action URLs
-		c.colly.OnHTML("form[action]", c.findFormsFunc(&forms, url, reqsMade))
+		c.colly.OnHTML("form[action]", c.findFormsFunc(&forms, u, reqsMade))
 	}
 
 	// setup a waitgroup to run all methods at the same time
@@ -117,21 +111,21 @@ func (c *Collector) Crawl(url string) ([]*http.Request, error) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		c.parseRobots(url, reqsMade)
+		c.parseRobots(u, reqsMade)
 	}()
 
 	// sitemap
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		c.parseSitemap(url, reqsMade)
+		c.parseSitemap(u, reqsMade)
 	}()
 
 	// certificates
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		c.parseCertificate(url, &subdomains, reqsMade)
+		c.parseCertificate(u, &subdomains, reqsMade)
 	}()
 
 	// waybackurls
@@ -139,7 +133,7 @@ func (c *Collector) Crawl(url string) ([]*http.Request, error) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			c.visitWaybackURLs(url, &subdomains, reqsMade)
+			c.visitWaybackURLs(u, &subdomains, reqsMade)
 		}()
 	}
 
@@ -147,14 +141,14 @@ func (c *Collector) Crawl(url string) ([]*http.Request, error) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		c.colly.Visit(url)
+		c.colly.Visit(u.String())
 	}()
 
 	wg.Wait()
 	return reqsMade.Reqs, nil
 }
 
-func (c *Collector) visitHTMLFunc(urls *sync.Map, subdomains *sync.Map, u string, reqsMade *syncList) func(e *colly.HTMLElement) {
+func (c *Collector) visitHTMLFunc(urls *sync.Map, subdomains *sync.Map, u *url.URL, reqsMade *syncList) func(e *colly.HTMLElement) {
 	return func(e *colly.HTMLElement) {
 		var urlString string = e.Request.AbsoluteURL(e.Attr("href"))
 		// if the url isn't already there, print and save it, if it's a new subdomain, print that too
@@ -192,7 +186,7 @@ func (c *Collector) visitHTMLFunc(urls *sync.Map, subdomains *sync.Map, u string
 	}
 }
 
-func (c *Collector) findJSFunc(jsfiles *sync.Map, u string, reqsMade *syncList) func(e *colly.HTMLElement) {
+func (c *Collector) findJSFunc(jsfiles *sync.Map, u *url.URL, reqsMade *syncList) func(e *colly.HTMLElement) {
 	return func(e *colly.HTMLElement) {
 		jsfile := e.Request.AbsoluteURL(e.Attr("src"))
 		if _, exists := jsfiles.Load(jsfile); exists {
@@ -209,7 +203,7 @@ func (c *Collector) findJSFunc(jsfiles *sync.Map, u string, reqsMade *syncList) 
 	}
 }
 
-func (c *Collector) findFormsFunc(forms *sync.Map, u string, reqsMade *syncList) func(e *colly.HTMLElement) {
+func (c *Collector) findFormsFunc(forms *sync.Map, u *url.URL, reqsMade *syncList) func(e *colly.HTMLElement) {
 	return func(e *colly.HTMLElement) {
 		form := e.Request.AbsoluteURL(e.Attr("action"))
 		if _, exists := forms.Load(form); exists {
@@ -223,29 +217,18 @@ func (c *Collector) findFormsFunc(forms *sync.Map, u string, reqsMade *syncList)
 	}
 }
 
-func parseHostFromURL(u string) (string, error) {
-	parsed, err := url.Parse(u)
-	if err != nil {
-		return "", err
-	}
-
-	return parsed.Host, nil
-}
-
 // recordIfInScope determines whether the domains/urls should be printed based on the provided scope (returns true/false).
-func (c *Collector) recordIfInScope(tag aurora.Value, u string, msg string, reqsMade *syncList) bool {
-	basehost, err := parseHostFromURL(u)
-	if err != nil {
-		// Error parsing base domain
-		return false
-	}
+func (c *Collector) recordIfInScope(tag aurora.Value, u *url.URL, msg string, reqsMade *syncList) bool {
+	basehost := u.Host
 
 	msgHost := msg
 	if strings.Contains(msg, "://") {
-		msgHost, err = parseHostFromURL(msg)
+		parsed, err := url.Parse(msg)
 		if err != nil {
 			return false
 		}
+
+		msgHost = parsed.Host
 	}
 
 	var shouldPrint bool
@@ -271,9 +254,9 @@ func (c *Collector) recordIfInScope(tag aurora.Value, u string, msg string, reqs
 	return shouldPrint
 }
 
-func (c *Collector) visitWaybackURLs(u string, subdomains *sync.Map, reqsMade *syncList) {
+func (c *Collector) visitWaybackURLs(u *url.URL, subdomains *sync.Map, reqsMade *syncList) {
 	// get results from waybackurls
-	waybackurls := waybackURLs(u)
+	waybackurls := waybackURLs(u.String())
 
 	// print wayback results, if depth >1, also add them to the crawl queue
 	for _, waybackurl := range waybackurls {
@@ -290,7 +273,7 @@ func (c *Collector) visitWaybackURLs(u string, subdomains *sync.Map, reqsMade *s
 				continue
 			}
 
-			if urlObj.Host != "" && strings.Contains(urlObj.Host, u) {
+			if urlObj.Host != "" && strings.Contains(urlObj.Host, u.String()) {
 				c.recordIfInScope(c.au.BrightGreen("[subdomain]"), u, urlObj.Host, reqsMade)
 				subdomains.Store(urlObj.Host, struct{}{})
 			}
@@ -303,11 +286,12 @@ func (c *Collector) visitWaybackURLs(u string, subdomains *sync.Map, reqsMade *s
 
 var robotsEntryRegex = regexp.MustCompile(".*llow: ")
 
-func (c *Collector) parseRobots(url string, reqsMade *syncList) {
+func (c *Collector) parseRobots(u *url.URL, reqsMade *syncList) {
 	var robotsurls []string
-	robotsURL := url + "/robots.txt"
 
-	resp, err := c.client.Get(robotsURL)
+	robotsUrl := u.ResolveReference(&url.URL{Path: "/robots.txt"})
+
+	resp, err := c.client.Get(robotsUrl.String())
 	if err != nil || resp.StatusCode != 200 {
 		return
 	}
@@ -322,11 +306,12 @@ func (c *Collector) parseRobots(url string, reqsMade *syncList) {
 	for _, line := range lines {
 		if robotsEntryRegex.MatchString(line) {
 			urlstring := robotsEntryRegex.ReplaceAllString(line, "")
+			newUrl := u.ResolveReference(&url.URL{Path: urlstring})
 			if c.conf.IncludeRobots || c.conf.IncludeAll {
-				_ = c.recordIfInScope(c.au.BrightMagenta("[robots]"), url, url+urlstring, reqsMade)
+				_ = c.recordIfInScope(c.au.BrightMagenta("[robots]"), u, newUrl.String(), reqsMade)
 			}
 			//add it to a slice for parsing later
-			robotsurls = append(robotsurls, url+urlstring)
+			robotsurls = append(robotsurls, newUrl.String())
 		}
 	}
 
@@ -340,7 +325,7 @@ func (c *Collector) parseRobots(url string, reqsMade *syncList) {
 
 var validDomainRegex = regexp.MustCompile("(?:[a-zA-Z](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]")
 
-func (c *Collector) processCertDomain(domain string, subdomains *sync.Map, u string, reqsMade *syncList) {
+func (c *Collector) processCertDomain(domain string, subdomains *sync.Map, u *url.URL, reqsMade *syncList) {
 	if !c.conf.IncludeCertificates && !c.conf.IncludeAll {
 		return
 	}
@@ -353,8 +338,8 @@ func (c *Collector) processCertDomain(domain string, subdomains *sync.Map, u str
 	}
 }
 
-func (c *Collector) parseCertificate(url string, subdomains *sync.Map, reqsMade *syncList) {
-	resp, err := c.client.Get(url)
+func (c *Collector) parseCertificate(u *url.URL, subdomains *sync.Map, reqsMade *syncList) {
+	resp, err := c.client.Get(u.String())
 	if err != nil || resp.StatusCode != 200 {
 		fmt.Println(err)
 		return
@@ -369,15 +354,15 @@ func (c *Collector) parseCertificate(url string, subdomains *sync.Map, reqsMade 
 
 	for _, cert := range certs {
 		subjectDomain := cert.Subject.CommonName
-		c.processCertDomain(subjectDomain, subdomains, url, reqsMade)
+		c.processCertDomain(subjectDomain, subdomains, u, reqsMade)
 
 		issuerDomain := cert.Issuer.CommonName
-		c.processCertDomain(issuerDomain, subdomains, url, reqsMade)
+		c.processCertDomain(issuerDomain, subdomains, u, reqsMade)
 
 		domains := cert.DNSNames
 
 		for _, domain := range domains {
-			c.processCertDomain(domain, subdomains, url, reqsMade)
+			c.processCertDomain(domain, subdomains, u, reqsMade)
 		}
 
 	}
@@ -404,10 +389,10 @@ func (c *Collector) linkfinder(jsfile string, tag aurora.Value, plain bool) {
 	}
 }
 
-func (c *Collector) parseSitemap(url string, reqsMade *syncList) {
-	sitemapURL := url + "/sitemap.xml"
+func (c *Collector) parseSitemap(u *url.URL, reqsMade *syncList) {
+	sitemapURL := u.ResolveReference(&url.URL{Path: "/sitemap.xml"})
 
-	resp, err := c.client.Get(sitemapURL)
+	resp, err := c.client.Get(sitemapURL.String())
 	if err != nil || resp.StatusCode != 200 {
 		return
 	}
@@ -415,7 +400,7 @@ func (c *Collector) parseSitemap(url string, reqsMade *syncList) {
 
 	sitemap.Parse(resp.Body, func(e sitemap.Entry) error {
 		if c.conf.IncludeSitemap || c.conf.IncludeAll {
-			_ = c.recordIfInScope(c.au.BrightBlue("[sitemap]"), url, e.GetLocation(), reqsMade)
+			_ = c.recordIfInScope(c.au.BrightBlue("[sitemap]"), u, e.GetLocation(), reqsMade)
 		}
 		// if depth is greater than 1, add sitemap url as seed
 		if c.conf.Depth > 1 {
